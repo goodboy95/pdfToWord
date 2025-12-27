@@ -30,6 +30,7 @@ public sealed partial class MainViewModel : ObservableObject
     private readonly ITableEngine _tableEngine;
     private readonly AppOptions _defaults;
     private readonly IApiKeyStore _apiKeyStore;
+    private readonly ILogSink _logSink;
 
     private CancellationTokenSource? _cts;
     private CancellationTokenSource? _previewCts;
@@ -174,7 +175,8 @@ public sealed partial class MainViewModel : ObservableObject
         ITableEngine tableEngine,
         AppOptions defaults,
         IApiKeyStore apiKeyStore,
-        UiLogSink logSink)
+        UiLogSink uiLogSink,
+        ILogSink logSink)
     {
         _conversionService = conversionService;
         _pdfRenderer = pdfRenderer;
@@ -182,6 +184,7 @@ public sealed partial class MainViewModel : ObservableObject
         _tableEngine = tableEngine;
         _defaults = defaults;
         _apiKeyStore = apiKeyStore;
+        _logSink = logSink;
 
         HeaderFooterMode = defaults.Layout.HeaderFooterMode;
         HeaderPercent = defaults.Layout.HeaderPercent;
@@ -200,7 +203,7 @@ public sealed partial class MainViewModel : ObservableObject
         ValidateCrop();
         ValidateGeminiEndpoint();
 
-        logSink.LogPublished += OnLogPublished;
+        uiLogSink.LogPublished += OnLogPublished;
     }
 
     partial void OnPdfPathChanged(string value)
@@ -334,7 +337,7 @@ public sealed partial class MainViewModel : ObservableObject
         }
         catch (Exception ex)
         {
-            Logs.Add("转换失败: " + ex.Message);
+            PublishUiLog("转换失败: " + ex.Message, JobStage.Finalize, ErrorSeverity.Fatal);
         }
         finally
         {
@@ -482,6 +485,19 @@ public sealed partial class MainViewModel : ObservableObject
         Application.Current.Dispatcher.Invoke(() =>
         {
             Logs.Add($"[{entry.TimestampUtc:HH:mm:ss}] {entry.Stage} {entry.Message}");
+        });
+    }
+
+    private void PublishUiLog(string message, JobStage stage, ErrorSeverity severity, string? errorCode = null)
+    {
+        _logSink.Publish(new LogEntry
+        {
+            TimestampUtc = DateTime.UtcNow,
+            Severity = severity,
+            Stage = stage,
+            ErrorCode = errorCode,
+            Message = message,
+            Attempt = 1
         });
     }
 
@@ -675,7 +691,7 @@ public sealed partial class MainViewModel : ObservableObject
         {
             PdfPageCount = 0;
             PdfInfoText = "读取页数失败";
-            Logs.Add("读取页数失败: " + ex.Message);
+            PublishUiLog("读取页数失败: " + ex.Message, JobStage.PdfOpen, ErrorSeverity.Fatal, "E_PDF_GET_PAGECOUNT_FAILED");
         }
     }
 

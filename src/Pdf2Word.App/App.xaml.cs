@@ -45,9 +45,11 @@ public partial class App : Application
                 services.AddSingleton<IApiKeyStore, DpapiApiKeyStore>();
                 services.AddSingleton<UiLogSink>();
                 services.AddSingleton<FileLogSink>();
+                services.AddSingleton<InstallLogSink>();
                 services.AddSingleton<ILogSink>(sp => new CompositeLogSink(
                     sp.GetRequiredService<UiLogSink>(),
-                    sp.GetRequiredService<FileLogSink>()));
+                    sp.GetRequiredService<FileLogSink>(),
+                    sp.GetRequiredService<InstallLogSink>()));
                 services.AddHttpClient();
                 services.AddSingleton<IGeminiClient>(sp =>
                 {

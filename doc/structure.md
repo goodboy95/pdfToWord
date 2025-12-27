@@ -74,6 +74,7 @@
 - Gemini/ImageEncoder.cs：图像编码与压缩。
 - Docx/OpenXmlDocxWriter.cs：OpenXML 写入 docx 实现。
 - Logging/FileLogSink.cs：诊断日志写入临时文件。
+- Logging/InstallLogSink.cs：运行日志写入安装目录 log。
 - Storage/TempStorage.cs：临时目录与诊断文件管理。
 
 ## tests/Pdf2Word.Tests/
