@@ -24,7 +24,7 @@ public sealed class GeminiClient : IGeminiClient
         var prompt = GeminiPrompts.BuildTablePrompt(cells, strictJson, attempt);
         var payload = BuildRequestPayload(prompt, tableImage, usePng: true);
         var json = await SendAsync(payload, _options.TimeoutSeconds.Table, ct).ConfigureAwait(false);
-        var text = NormalizeJson(ExtractText(json));
+        var text = NormalizeJson(OpenAiResponseParser.ExtractText(json));
         return ParseTableCellResult(text, json);
     }
 
@@ -33,7 +33,7 @@ public sealed class GeminiClient : IGeminiClient
         var prompt = GeminiPrompts.BuildPagePrompt(strictJson, attempt);
         var payload = BuildRequestPayload(prompt, pageImageMasked, usePng: false);
         var json = await SendAsync(payload, _options.TimeoutSeconds.Page, ct).ConfigureAwait(false);
-        var text = NormalizeJson(ExtractText(json));
+        var text = NormalizeJson(OpenAiResponseParser.ExtractText(json));
         return ParsePageParagraphs(text, json);
     }
 
@@ -42,7 +42,7 @@ public sealed class GeminiClient : IGeminiClient
         var prompt = GeminiPrompts.BuildTableFallbackPrompt(attempt);
         var payload = BuildRequestPayload(prompt, tableImage, usePng: true);
         var json = await SendAsync(payload, _options.TimeoutSeconds.Table, ct).ConfigureAwait(false);
-        var text = NormalizeJson(ExtractText(json));
+        var text = NormalizeJson(OpenAiResponseParser.ExtractText(json));
         return ParseTableLines(text, json);
     }
 
@@ -51,7 +51,7 @@ public sealed class GeminiClient : IGeminiClient
         var prompt = GeminiPrompts.BuildPageFallbackPrompt(attempt);
         var payload = BuildRequestPayload(prompt, pageImage, usePng: false);
         var json = await SendAsync(payload, _options.TimeoutSeconds.Page, ct).ConfigureAwait(false);
-        var text = NormalizeJson(ExtractText(json));
+        var text = NormalizeJson(OpenAiResponseParser.ExtractText(json));
         return ParsePageFallback(text, json);
     }
 
@@ -59,25 +59,24 @@ public sealed class GeminiClient : IGeminiClient
     {
         var imageBytes = ImageEncoder.Encode(image, usePng, _options.Image.MaxLongEdgePx, _options.Image.JpegQuality);
         var mime = usePng ? "image/png" : "image/jpeg";
-        var inlineData = new
-        {
-            mime_type = mime,
-            data = Convert.ToBase64String(imageBytes)
-        };
+        var dataUrl = $"data:{mime};base64,{Convert.ToBase64String(imageBytes)}";
 
         var body = new
         {
-            contents = new[]
+            model = _options.Model,
+            messages = new[]
             {
                 new
                 {
-                    parts = new object[]
+                    role = "user",
+                    content = new object[]
                     {
-                        new { text = prompt },
-                        new { inline_data = inlineData }
+                        new { type = "text", text = prompt },
+                        new { type = "image_url", image_url = new { url = dataUrl } }
                     }
                 }
-            }
+            },
+            temperature = 0
         };
 
         return JsonSerializer.Serialize(body);
@@ -88,50 +87,58 @@ public sealed class GeminiClient : IGeminiClient
         var apiKey = _apiKeyProvider();
         if (string.IsNullOrWhiteSpace(apiKey))
         {
-            throw new InvalidOperationException("Gemini API Key is missing.");
+            throw new InvalidOperationException("AI API Key is missing.");
         }
 
-        var endpoint = _options.Endpoint;
-        if (string.IsNullOrWhiteSpace(endpoint))
+        var baseUrl = _options.BaseUrl;
+        if (string.IsNullOrWhiteSpace(baseUrl))
         {
-            throw new InvalidOperationException("Gemini endpoint is not configured.");
+            throw new InvalidOperationException("AI Base URL is not configured.");
         }
 
-        var url = endpoint.Contains("key=") ? endpoint : endpoint + (endpoint.Contains('?') ? "&" : "?") + "key=" + Uri.EscapeDataString(apiKey);
+        if (string.IsNullOrWhiteSpace(_options.Model))
+        {
+            throw new InvalidOperationException("AI model is not configured.");
+        }
+
+        var url = BuildChatCompletionsUrl(baseUrl);
         using var content = new StringContent(payload, Encoding.UTF8, "application/json");
         _httpClient.DefaultRequestHeaders.Accept.Clear();
         _httpClient.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
+        _httpClient.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
         _httpClient.Timeout = TimeSpan.FromSeconds(timeoutSeconds);
 
         using var response = await _httpClient.PostAsync(url, content, ct).ConfigureAwait(false);
-        response.EnsureSuccessStatusCode();
+        if (!response.IsSuccessStatusCode)
+        {
+            var snippet = await ReadSnippetAsync(response, ct).ConfigureAwait(false);
+            throw new GeminiHttpException(response.StatusCode, snippet);
+        }
         return await response.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
     }
 
-    private static string ExtractText(string responseJson)
+    private static async Task<string?> ReadSnippetAsync(HttpResponseMessage response, CancellationToken ct)
     {
-        using var doc = JsonDocument.Parse(responseJson);
-        if (doc.RootElement.TryGetProperty("candidates", out var candidates) && candidates.ValueKind == JsonValueKind.Array && candidates.GetArrayLength() > 0)
+        try
         {
-            var candidate = candidates[0];
-            if (candidate.TryGetProperty("content", out var content) && content.TryGetProperty("parts", out var parts))
+            var content = await response.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
+            if (string.IsNullOrWhiteSpace(content))
             {
-                foreach (var part in parts.EnumerateArray())
-                {
-                    if (part.TryGetProperty("text", out var textProp))
-                    {
-                        return textProp.GetString() ?? string.Empty;
-                    }
-                }
+                return null;
             }
-        }
 
-        if (doc.RootElement.TryGetProperty("text", out var text))
+            return content.Length <= 300 ? content : content[..300];
+        }
+        catch
         {
-            return text.GetString() ?? string.Empty;
+            return null;
         }
+    }
 
-        return responseJson;
+    private static string BuildChatCompletionsUrl(string baseUrl)
+    {
+        var trimmed = baseUrl.TrimEnd('/');
+        return $"{trimmed}/chat/completions";
     }
 
     private static string NormalizeJson(string text)

@@ -29,17 +29,17 @@ public sealed class DpapiApiKeyStore : IApiKeyStore
 
         if (_options.ApiKeyStorage == GeminiKeyStorage.EnvOnly)
         {
-            return Environment.GetEnvironmentVariable("GEMINI_API_KEY");
+            return ReadEnvApiKey();
         }
 
         if (_options.ApiKeyStorage == GeminiKeyStorage.None)
         {
-            return Environment.GetEnvironmentVariable("GEMINI_API_KEY");
+            return ReadEnvApiKey();
         }
 
         if (!File.Exists(_path))
         {
-            return Environment.GetEnvironmentVariable("GEMINI_API_KEY");
+            return ReadEnvApiKey();
         }
 
         var protectedBytes = File.ReadAllBytes(_path);
@@ -64,5 +64,12 @@ public sealed class DpapiApiKeyStore : IApiKeyStore
         var bytes = Encoding.UTF8.GetBytes(apiKey);
         var protectedBytes = ProtectedData.Protect(bytes, null, DataProtectionScope.CurrentUser);
         File.WriteAllBytes(_path, protectedBytes);
+    }
+
+    private static string? ReadEnvApiKey()
+    {
+        return Environment.GetEnvironmentVariable("AI_API_KEY")
+            ?? Environment.GetEnvironmentVariable("OPENAI_API_KEY")
+            ?? Environment.GetEnvironmentVariable("GEMINI_API_KEY");
     }
 }

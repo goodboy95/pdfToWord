@@ -533,17 +533,22 @@ public sealed class ConversionService : IConversionService
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Gemini table OCR failed");
+                var error = GeminiErrorMapper.FromException(ex, ct.IsCancellationRequested, "表格识别失败");
+                _logger.LogError(ex, "Gemini table OCR failed ({ErrorCode})", error.ErrorCode);
                 failures.Add(new FailureInfo
                 {
                     PageNumber = pageNumber,
                     TableIndex = tableIndex,
-                    ErrorCode = "E_GEMINI_TIMEOUT",
-                    Message = "表格识别失败",
+                    ErrorCode = error.ErrorCode,
+                    Message = error.Message,
                     Severity = ErrorSeverity.Recoverable,
                     Stage = JobStage.GeminiTableOcr,
                     Attempt = attempt + 1
                 });
+                if (!error.Retryable)
+                {
+                    return null;
+                }
             }
             finally
             {
@@ -590,17 +595,22 @@ public sealed class ConversionService : IConversionService
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Gemini table fallback failed");
+                var error = GeminiErrorMapper.FromException(ex, ct.IsCancellationRequested, "表格降级识别失败");
+                _logger.LogError(ex, "Gemini table fallback failed ({ErrorCode})", error.ErrorCode);
                 failures.Add(new FailureInfo
                 {
                     PageNumber = pageNumber,
                     TableIndex = tableIndex,
-                    ErrorCode = "E_GEMINI_TIMEOUT",
-                    Message = "表格降级识别失败",
+                    ErrorCode = error.ErrorCode,
+                    Message = error.Message,
                     Severity = ErrorSeverity.Recoverable,
                     Stage = JobStage.GeminiTableOcr,
                     Attempt = attempt + 1
                 });
+                if (!error.Retryable)
+                {
+                    return new List<string>();
+                }
             }
             finally
             {
@@ -664,16 +674,21 @@ public sealed class ConversionService : IConversionService
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Gemini page OCR failed");
+                var error = GeminiErrorMapper.FromException(ex, ct.IsCancellationRequested, "正文识别失败");
+                _logger.LogError(ex, "Gemini page OCR failed ({ErrorCode})", error.ErrorCode);
                 failures.Add(new FailureInfo
                 {
                     PageNumber = pageNumber,
-                    ErrorCode = "E_GEMINI_TIMEOUT",
-                    Message = "正文识别失败",
+                    ErrorCode = error.ErrorCode,
+                    Message = error.Message,
                     Severity = ErrorSeverity.Recoverable,
                     Stage = JobStage.GeminiPageOcr,
                     Attempt = attempt + 1
                 });
+                if (!error.Retryable)
+                {
+                    return new List<ParagraphDto>();
+                }
             }
             finally
             {
@@ -724,16 +739,21 @@ public sealed class ConversionService : IConversionService
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Gemini page fallback failed");
+                var error = GeminiErrorMapper.FromException(ex, ct.IsCancellationRequested, "正文降级识别失败");
+                _logger.LogError(ex, "Gemini page fallback failed ({ErrorCode})", error.ErrorCode);
                 failures.Add(new FailureInfo
                 {
                     PageNumber = pageNumber,
-                    ErrorCode = "E_GEMINI_TIMEOUT",
-                    Message = "正文降级识别失败",
+                    ErrorCode = error.ErrorCode,
+                    Message = error.Message,
                     Severity = ErrorSeverity.Recoverable,
                     Stage = JobStage.GeminiPageOcr,
                     Attempt = attempt + 1
                 });
+                if (!error.Retryable)
+                {
+                    return new List<ParagraphDto>();
+                }
             }
             finally
             {

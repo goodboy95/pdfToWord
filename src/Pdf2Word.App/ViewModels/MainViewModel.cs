@@ -85,16 +85,25 @@ public sealed partial class MainViewModel : ObservableObject
     private bool _keepDiagnostics;
 
     [ObservableProperty]
-    private string _geminiEndpointUrl = string.Empty;
+    private string _aiBaseUrl = string.Empty;
 
     [ObservableProperty]
-    private string _geminiApiKey = string.Empty;
+    private string _aiModel = string.Empty;
 
     [ObservableProperty]
-    private string _geminiEndpointError = string.Empty;
+    private string _aiApiKey = string.Empty;
 
     [ObservableProperty]
-    private bool _hasGeminiEndpointError;
+    private string _aiBaseUrlError = string.Empty;
+
+    [ObservableProperty]
+    private bool _hasAiBaseUrlError;
+
+    [ObservableProperty]
+    private string _aiModelError = string.Empty;
+
+    [ObservableProperty]
+    private bool _hasAiModelError;
 
     [ObservableProperty]
     private bool _isBusy;
@@ -165,7 +174,7 @@ public sealed partial class MainViewModel : ObservableObject
     [ObservableProperty]
     private bool _previewShowCropOverlay = true;
 
-    public bool HasInputErrors => HasPageRangeError || HasCropError || HasGeminiEndpointError;
+    public bool HasInputErrors => HasPageRangeError || HasCropError || HasAiBaseUrlError || HasAiModelError;
 
     public bool CanStart => !IsBusy && !string.IsNullOrWhiteSpace(PdfPath) && !HasInputErrors;
 
@@ -194,14 +203,16 @@ public sealed partial class MainViewModel : ObservableObject
         Concurrency = defaults.Runtime.PageConcurrency;
         DeskewEnabled = defaults.Preprocess.EnableDeskew;
         KeepDiagnostics = defaults.Diagnostics.KeepTempFiles;
-        GeminiEndpointUrl = defaults.Gemini.Endpoint;
-        GeminiApiKey = apiKeyStore.GetApiKey() ?? string.Empty;
+        AiBaseUrl = defaults.Gemini.BaseUrl;
+        AiModel = defaults.Gemini.Model;
+        AiApiKey = apiKeyStore.GetApiKey() ?? string.Empty;
         PreviewShowCropped = false;
         PreviewShowTables = false;
 
         UpdateHeaderFooterEnabled();
         ValidateCrop();
-        ValidateGeminiEndpoint();
+        ValidateAiBaseUrl();
+        ValidateAiModel();
 
         uiLogSink.LogPublished += OnLogPublished;
     }
@@ -227,9 +238,13 @@ public sealed partial class MainViewModel : ObservableObject
 
     partial void OnHasCropErrorChanged(bool value) => OnPropertyChanged(nameof(CanStart));
 
-    partial void OnGeminiEndpointUrlChanged(string value) => ValidateGeminiEndpoint();
+    partial void OnAiBaseUrlChanged(string value) => ValidateAiBaseUrl();
 
-    partial void OnHasGeminiEndpointErrorChanged(bool value) => OnPropertyChanged(nameof(CanStart));
+    partial void OnHasAiBaseUrlErrorChanged(bool value) => OnPropertyChanged(nameof(CanStart));
+
+    partial void OnAiModelChanged(string value) => ValidateAiModel();
+
+    partial void OnHasAiModelErrorChanged(bool value) => OnPropertyChanged(nameof(CanStart));
 
     partial void OnOutputPathChanged(string value) => UpdateOutputAvailability();
 
@@ -291,7 +306,7 @@ public sealed partial class MainViewModel : ObservableObject
         CanOpenOutput = false;
         CanOpenOutputFolder = false;
 
-        _apiKeyStore.SaveApiKey(GeminiApiKey);
+        _apiKeyStore.SaveApiKey(AiApiKey);
 
         var options = BuildOptions();
         var request = new ConvertJobRequest
@@ -300,7 +315,7 @@ public sealed partial class MainViewModel : ObservableObject
             OutputPath = OutputPath,
             PageRangeText = PageRangeText,
             Options = options,
-            GeminiApiKey = GeminiApiKey
+            AiApiKey = AiApiKey
         };
 
         _cts = new CancellationTokenSource();
@@ -538,7 +553,8 @@ public sealed partial class MainViewModel : ObservableObject
             },
             Gemini = new GeminiOptions
             {
-                Endpoint = ResolveGeminiEndpoint(),
+                BaseUrl = ResolveAiBaseUrl(),
+                Model = ResolveAiModel(),
                 ApiKeyStorage = _defaults.Gemini.ApiKeyStorage,
                 TimeoutSeconds = new GeminiTimeouts { Table = _defaults.Gemini.TimeoutSeconds.Table, Page = _defaults.Gemini.TimeoutSeconds.Page },
                 MaxRetryCount = _defaults.Gemini.MaxRetryCount,
@@ -629,38 +645,59 @@ public sealed partial class MainViewModel : ObservableObject
         HasCropError = false;
     }
 
-    private void ValidateGeminiEndpoint()
+    private void ValidateAiBaseUrl()
     {
-        var value = GeminiEndpointUrl?.Trim() ?? string.Empty;
+        var value = AiBaseUrl?.Trim() ?? string.Empty;
         if (string.IsNullOrWhiteSpace(value))
         {
-            GeminiEndpointError = "请填写 Gemini URL。";
-            HasGeminiEndpointError = true;
+            AiBaseUrlError = "请填写 Base URL。";
+            HasAiBaseUrlError = true;
             return;
         }
 
         if (!value.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
         {
-            GeminiEndpointError = "Gemini URL 必须以 https:// 开头。";
-            HasGeminiEndpointError = true;
+            AiBaseUrlError = "Base URL 必须以 https:// 开头。";
+            HasAiBaseUrlError = true;
             return;
         }
 
-        if (!value.EndsWith("generateContent", StringComparison.OrdinalIgnoreCase))
+        var normalized = value.TrimEnd('/');
+        if (!normalized.EndsWith("/v1", StringComparison.OrdinalIgnoreCase))
         {
-            GeminiEndpointError = "Gemini URL 必须以 generateContent 结束。";
-            HasGeminiEndpointError = true;
+            AiBaseUrlError = "Base URL 需要包含版本号，例如 https://xxx.com/v1。";
+            HasAiBaseUrlError = true;
             return;
         }
 
-        GeminiEndpointError = string.Empty;
-        HasGeminiEndpointError = false;
+        AiBaseUrlError = string.Empty;
+        HasAiBaseUrlError = false;
     }
 
-    private string ResolveGeminiEndpoint()
+    private void ValidateAiModel()
     {
-        var value = GeminiEndpointUrl?.Trim() ?? string.Empty;
-        return string.IsNullOrWhiteSpace(value) ? _defaults.Gemini.Endpoint : value;
+        var value = AiModel?.Trim() ?? string.Empty;
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            AiModelError = "请填写模型名称。";
+            HasAiModelError = true;
+            return;
+        }
+
+        AiModelError = string.Empty;
+        HasAiModelError = false;
+    }
+
+    private string ResolveAiBaseUrl()
+    {
+        var value = AiBaseUrl?.Trim() ?? string.Empty;
+        return string.IsNullOrWhiteSpace(value) ? _defaults.Gemini.BaseUrl : value;
+    }
+
+    private string ResolveAiModel()
+    {
+        var value = AiModel?.Trim() ?? string.Empty;
+        return string.IsNullOrWhiteSpace(value) ? _defaults.Gemini.Model : value;
     }
 
     private async Task LoadPdfInfoAsync()

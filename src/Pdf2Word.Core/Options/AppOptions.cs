@@ -125,7 +125,8 @@ public enum OwnerConflictPolicy
 
 public sealed class GeminiOptions
 {
-    public string Endpoint { get; set; } = "";
+    public string BaseUrl { get; set; } = "";
+    public string Model { get; set; } = "";
     public GeminiKeyStorage ApiKeyStorage { get; set; } = GeminiKeyStorage.DPAPI;
     public GeminiTimeouts TimeoutSeconds { get; set; } = new();
     public int MaxRetryCount { get; set; } = 1;

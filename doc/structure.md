@@ -37,7 +37,7 @@
 - MainWindow.xaml.cs：主窗体代码隐藏，设置 DataContext。
 - appsettings.json：默认配置项。
 - Models/PreviewOverlay.cs：预览叠加层矩形模型（裁切遮罩/表格框）。
-- Services/DpapiApiKeyStore.cs：使用 DPAPI 加密保存 Gemini API Key。
+- Services/DpapiApiKeyStore.cs：使用 DPAPI 加密保存 AI API Key（兼容环境变量）。
 - Services/BitmapSourceHelper.cs：System.Drawing.Bitmap 转 WPF ImageSource 辅助。
 - Services/CompositeLogSink.cs：组合日志写入（UI + 文件）。
 - Services/UiLogSink.cs：UI 日志接收器。
@@ -54,7 +54,7 @@
 - Models/Ir/DocumentIr.cs：Document IR 结构定义。
 - Models/Ir/PageIr.cs：Page/Block/Table IR 结构定义。
 - Logging/LogEntry.cs：日志结构与日志发布接口。
-- Options/AppOptions.cs：全量配置项与默认值。
+- Options/AppOptions.cs：全量配置项与默认值（含 AI Base URL/Model）。
 - Services/Interfaces.cs：核心接口定义（渲染、表格、Gemini、Docx 等）。
 - Services/PageRangeParser.cs：页码范围解析实现。
 - Services/TextCleaner.cs：文本清洗与乱码统计。
@@ -62,6 +62,9 @@
 - Services/TableIrBuilder.cs：表格检测结果转 Table IR。
 - Services/IrBuilder.cs：段落/表格合并为 Page IR 的构建器。
 - Services/ConversionService.cs：转换流程调度与重试/降级逻辑。
+- Services/GeminiErrorMapper.cs：Gemini 网络异常到错误码/重试策略映射。
+- Services/GeminiHttpException.cs：Gemini HTTP 非成功状态异常封装。
+- Services/OpenAiResponseParser.cs：OpenAI 兼容响应内容抽取器。
 - Validation/TableStructureValidator.cs：表格结构校验（owner matrix）。
 
 ## src/Pdf2Word.Infrastructure/
@@ -69,7 +72,7 @@
 - Pdf/PdfiumRenderer.cs：PDFium 渲染器实现。
 - ImageProcessing/OpenCvPageImagePipeline.cs：图像裁切/预处理管线。
 - Table/OpenCvTableEngine.cs：表格检测与单元格分割实现。
-- Gemini/GeminiClient.cs：Gemini API 调用与响应解析。
+- Gemini/GeminiClient.cs：OpenAI 兼容接口调用与响应解析（图文输入）。
 - Gemini/GeminiPrompts.cs：Gemini Prompt 模板。
 - Gemini/ImageEncoder.cs：图像编码与压缩。
 - Docx/OpenXmlDocxWriter.cs：OpenXML 写入 docx 实现。
@@ -80,6 +83,8 @@
 ## tests/Pdf2Word.Tests/
 - Pdf2Word.Tests.csproj：测试项目文件。
 - Tests/PageRangeParserTests.cs：页码范围解析测试。
+- Tests/GeminiErrorMapperTests.cs：Gemini 错误码映射测试。
+- Tests/OpenAiResponseParserTests.cs：OpenAI 兼容响应解析测试。
 - Tests/TextCleanerTests.cs：文本清洗测试。
 - Tests/TwipsConverterTests.cs：像素→twips 换算测试。
 - Tests/TableStructureValidatorTests.cs：表格结构校验测试。

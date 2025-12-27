@@ -1,8 +1,8 @@
-# 08_Gemini 集成与提示词
+# 08_AI 集成与提示词（OpenAI 兼容）
 
 ## 8.1 文档目的
 
-本文档定义 Gemini 在本项目中的集成方式、调用协议与提示词（Prompt）规范，目标是：
+本文档定义 AI（OpenAI 兼容接口）在本项目中的集成方式、调用协议与提示词（Prompt）规范，目标是：
 
 * 将 Gemini 用作**OCR/文本识别引擎**，而不是版面结构推断引擎
 * 让返回结果 **严格为 JSON**，便于校验、重试、降级
@@ -41,13 +41,14 @@
 
 ---
 
-## 8.3 GeminiClient 设计（架构与接口）
+## 8.3 AI Client 设计（架构与接口）
 
 ### 8.3.1 关键能力要求
 
 * 统一封装 `HttpClient`
 * 支持超时、重试、并发限流（SemaphoreSlim）
-* 支持图片编码（建议 PNG/JPEG Base64）
+* 使用 OpenAI 兼容 `chat/completions` 接口，需提供 Base URL（带版本号）与 Model
+* 支持图片编码（PNG/JPEG Base64 → `image_url` data URL）
 * 严格 JSON 输出：失败则触发重试（使用更强约束 prompt）
 * 输出内容做基础过滤（移除控制字符等）
 

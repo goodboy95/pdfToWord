@@ -8,7 +8,7 @@ public sealed class ConvertJobRequest
     public string OutputPath { get; set; } = string.Empty;
     public string PageRangeText { get; set; } = string.Empty;
     public AppOptions Options { get; set; } = new();
-    public string? GeminiApiKey { get; set; }
+    public string? AiApiKey { get; set; }
 }
 
 public sealed class ConvertResult
