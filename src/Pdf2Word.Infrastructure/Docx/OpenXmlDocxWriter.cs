@@ -5,6 +5,7 @@ using Pdf2Word.Core.Models;
 using Pdf2Word.Core.Models.Ir;
 using Pdf2Word.Core.Options;
 using Pdf2Word.Core.Services;
+using WordTable = DocumentFormat.OpenXml.Wordprocessing.Table;
 
 namespace Pdf2Word.Infrastructure.Docx;
 
@@ -24,13 +25,13 @@ public sealed class OpenXmlDocxWriter : IDocxWriter
             var pageSize = ResolvePageSize(page, options);
             var pageMargins = new PageMargin
             {
-                Top = options.MarginTopTwips,
-                Bottom = options.MarginBottomTwips,
-                Left = options.MarginLeftTwips,
-                Right = options.MarginRightTwips
+                Top = ToInt32Value(options.MarginTopTwips),
+                Bottom = ToInt32Value(options.MarginBottomTwips),
+                Left = ToUInt32Value(options.MarginLeftTwips),
+                Right = ToUInt32Value(options.MarginRightTwips)
             };
 
-            var context = new PageContext(pageSize.Width, pageSize.Height, pageMargins);
+            var context = new PageContext(ToInt(pageSize.Width), ToInt(pageSize.Height), pageMargins);
 
             foreach (var block in page.Blocks)
             {
@@ -67,10 +68,10 @@ public sealed class OpenXmlDocxWriter : IDocxWriter
         {
             body.AppendChild(BuildSectionProperties(GetA4Size(), new PageMargin
             {
-                Top = options.MarginTopTwips,
-                Bottom = options.MarginBottomTwips,
-                Left = options.MarginLeftTwips,
-                Right = options.MarginRightTwips
+                Top = ToInt32Value(options.MarginTopTwips),
+                Bottom = ToInt32Value(options.MarginBottomTwips),
+                Left = ToUInt32Value(options.MarginLeftTwips),
+                Right = ToUInt32Value(options.MarginRightTwips)
             }));
         }
 
@@ -120,9 +121,9 @@ public sealed class OpenXmlDocxWriter : IDocxWriter
             new FontSize { Val = options.DefaultFontSizeHalfPoints.ToString() });
     }
 
-    private static Table BuildTable(TableBlockIr table, PageContext context, DocxWriteOptions options)
+    private static WordTable BuildTable(TableBlockIr table, PageContext context, DocxWriteOptions options)
     {
-        var tbl = new Table();
+        var tbl = new WordTable();
         var tblPr = new TableProperties();
         if (options.Table.SetBorders)
         {
@@ -294,6 +295,21 @@ public sealed class OpenXmlDocxWriter : IDocxWriter
     private static PageSize GetA4Size()
     {
         return new PageSize { Width = (UInt32Value)11906U, Height = (UInt32Value)16838U };
+    }
+
+    private static Int32Value ToInt32Value(int value)
+    {
+        return new Int32Value(value);
+    }
+
+    private static UInt32Value ToUInt32Value(int value)
+    {
+        return new UInt32Value((uint)Math.Max(0, value));
+    }
+
+    private static int ToInt(UInt32Value? value)
+    {
+        return value?.Value is null ? 0 : (int)value.Value;
     }
 
     private readonly record struct PageContext(int PageWidthTwips, int PageHeightTwips, PageMargin Margins);

@@ -1,10 +1,10 @@
-<Window x:Class="Pdf2Word.MainWindow"
+<Window x:Class="Pdf2Word.App.MainWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
         mc:Ignorable="d"
-        Title="Pdf2Word" Height="760" Width="1100" Background="{StaticResource LightBackground}">
+        Title="Pdf2Word" Height="780" Width="1180" Background="{StaticResource LightBackground}">
     <Grid Margin="20">
         <Grid.ColumnDefinitions>
             <ColumnDefinition Width="2*" />
@@ -25,7 +25,8 @@
                             <TextBox Text="{Binding PdfPath, UpdateSourceTrigger=PropertyChanged}" IsReadOnly="True" Width="420" />
                             <Button Content="选择..." Command="{Binding BrowsePdfCommand}" Margin="8,0,0,0" />
                         </DockPanel>
-                        <TextBlock Foreground="#666" FontSize="12" Text="支持图片型/扫描型 PDF" Margin="0,4,0,0" />
+                        <TextBlock Foreground="#666" FontSize="12" Text="{Binding PdfInfoText}" Margin="0,4,0,0" />
+                        <TextBlock Foreground="#666" FontSize="12" Text="支持图片型/扫描型 PDF" Margin="0,2,0,0" />
                     </StackPanel>
                 </Border>
 
@@ -34,6 +35,9 @@
                         <TextBlock FontWeight="SemiBold" Text="页码范围" />
                         <TextBox Text="{Binding PageRangeText, UpdateSourceTrigger=PropertyChanged}" Margin="0,6,0,0" />
                         <TextBlock Foreground="#666" FontSize="12" Text="留空=全部页；例如 1,3,5-10" Margin="0,4,0,0" />
+                        <TextBlock Foreground="#666" FontSize="12" Text="{Binding PageRangeSummary}" Margin="0,2,0,0" />
+                        <TextBlock Foreground="IndianRed" FontSize="12" Text="{Binding PageRangeError}" Margin="0,2,0,0"
+                                   Visibility="{Binding HasPageRangeError, Converter={StaticResource BoolToVisibility}}" />
                     </StackPanel>
                 </Border>
 
@@ -44,14 +48,16 @@
                         <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
                             <StackPanel Width="120">
                                 <TextBlock Text="页眉裁切" FontSize="12" Foreground="#666" />
-                                <TextBox Text="{Binding HeaderPercent}" />
+                                <TextBox Text="{Binding HeaderPercent}" IsEnabled="{Binding IsHeaderEnabled}" />
                             </StackPanel>
                             <StackPanel Width="120" Margin="12,0,0,0">
                                 <TextBlock Text="页脚裁切" FontSize="12" Foreground="#666" />
-                                <TextBox Text="{Binding FooterPercent}" />
+                                <TextBox Text="{Binding FooterPercent}" IsEnabled="{Binding IsFooterEnabled}" />
                             </StackPanel>
                         </StackPanel>
                         <TextBlock Foreground="#666" FontSize="12" Text="比例范围 0~0.2，默认 0.06" Margin="0,4,0,0" />
+                        <TextBlock Foreground="IndianRed" FontSize="12" Text="{Binding CropError}" Margin="0,2,0,0"
+                                   Visibility="{Binding HasCropError, Converter={StaticResource BoolToVisibility}}" />
                     </StackPanel>
                 </Border>
 
@@ -62,31 +68,32 @@
                     </StackPanel>
                 </Border>
 
-                <Border Background="White" CornerRadius="8" Padding="16" Margin="0,0,0,12">
-                    <StackPanel>
-                        <TextBlock FontWeight="SemiBold" Text="高级设置" />
-                        <StackPanel Orientation="Horizontal" Margin="0,6,0,0">
-                            <StackPanel Width="120">
-                                <TextBlock Text="DPI" FontSize="12" Foreground="#666" />
-                                <ComboBox ItemsSource="{Binding DpiOptions}" SelectedItem="{Binding Dpi}" />
+                <Expander Header="高级设置" Margin="0,0,0,12">
+                    <Border Background="White" CornerRadius="8" Padding="16">
+                        <StackPanel>
+                            <StackPanel Orientation="Horizontal" Margin="0,6,0,0">
+                                <StackPanel Width="120">
+                                    <TextBlock Text="DPI" FontSize="12" Foreground="#666" />
+                                    <ComboBox ItemsSource="{Binding DpiOptions}" SelectedItem="{Binding Dpi}" />
+                                </StackPanel>
+                                <StackPanel Width="120" Margin="12,0,0,0">
+                                    <TextBlock Text="并发" FontSize="12" Foreground="#666" />
+                                    <ComboBox ItemsSource="{Binding ConcurrencyOptions}" SelectedItem="{Binding Concurrency}" />
+                                </StackPanel>
+                                <StackPanel Width="160" Margin="12,0,0,0">
+                                    <TextBlock Text="倾斜校正" FontSize="12" Foreground="#666" />
+                                    <CheckBox Content="启用" IsChecked="{Binding DeskewEnabled}" />
+                                </StackPanel>
                             </StackPanel>
-                            <StackPanel Width="120" Margin="12,0,0,0">
-                                <TextBlock Text="并发" FontSize="12" Foreground="#666" />
-                                <ComboBox ItemsSource="{Binding ConcurrencyOptions}" SelectedItem="{Binding Concurrency}" />
-                            </StackPanel>
-                            <StackPanel Width="160" Margin="12,0,0,0">
-                                <TextBlock Text="倾斜校正" FontSize="12" Foreground="#666" />
-                                <CheckBox Content="启用" IsChecked="{Binding DeskewEnabled}" />
+                            <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
+                                <StackPanel Width="420">
+                                    <TextBlock Text="Gemini API Key" FontSize="12" Foreground="#666" />
+                                    <TextBox Text="{Binding GeminiApiKey, UpdateSourceTrigger=PropertyChanged}" />
+                                </StackPanel>
                             </StackPanel>
                         </StackPanel>
-                        <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
-                            <StackPanel Width="420">
-                                <TextBlock Text="Gemini API Key" FontSize="12" Foreground="#666" />
-                                <TextBox Text="{Binding GeminiApiKey, UpdateSourceTrigger=PropertyChanged}" />
-                            </StackPanel>
-                        </StackPanel>
-                    </StackPanel>
-                </Border>
+                    </Border>
+                </Expander>
 
                 <Border Background="White" CornerRadius="8" Padding="16" Margin="0,0,0,12">
                     <StackPanel>
@@ -96,6 +103,10 @@
                             <Button Content="选择..." Command="{Binding BrowseOutputCommand}" Margin="8,0,0,0" />
                         </DockPanel>
                         <CheckBox Content="保留诊断文件" IsChecked="{Binding KeepDiagnostics}" Margin="0,6,0,0" />
+                        <StackPanel Orientation="Horizontal" Margin="0,6,0,0">
+                            <Button Content="打开 Word" Command="{Binding OpenOutputCommand}" IsEnabled="{Binding CanOpenOutput}" />
+                            <Button Content="打开文件夹" Command="{Binding OpenOutputFolderCommand}" IsEnabled="{Binding CanOpenOutputFolder}" Margin="8,0,0,0" />
+                        </StackPanel>
                     </StackPanel>
                 </Border>
 
@@ -108,27 +119,82 @@
 
         <Border Grid.Column="1" Background="White" CornerRadius="8" Padding="16">
             <StackPanel>
-                <TextBlock FontWeight="SemiBold" Text="进度与日志" />
+                <TextBlock FontWeight="SemiBold" Text="进度" />
                 <ProgressBar Minimum="0" Maximum="100" Value="{Binding ProgressPercent}" Height="16" Margin="0,8,0,0" />
                 <TextBlock Text="{Binding ProgressText}" Margin="0,6,0,12" />
 
-                <TextBlock FontWeight="SemiBold" Text="日志" />
-                <ListBox ItemsSource="{Binding Logs}" Height="320" Margin="0,6,0,0">
-                    <ListBox.ItemTemplate>
-                        <DataTemplate>
-                            <TextBlock Text="{Binding}" FontSize="12" TextWrapping="Wrap" />
-                        </DataTemplate>
-                    </ListBox.ItemTemplate>
-                </ListBox>
+                <TabControl>
+                    <TabItem Header="日志">
+                        <StackPanel>
+                            <TextBlock FontWeight="SemiBold" Text="日志" />
+                            <ListBox ItemsSource="{Binding Logs}" Height="240" Margin="0,6,0,0">
+                                <ListBox.ItemTemplate>
+                                    <DataTemplate>
+                                        <TextBlock Text="{Binding}" FontSize="12" TextWrapping="Wrap" />
+                                    </DataTemplate>
+                                </ListBox.ItemTemplate>
+                            </ListBox>
 
-                <TextBlock FontWeight="SemiBold" Text="失败页" Margin="0,12,0,0" />
-                <ListBox ItemsSource="{Binding Failures}" Height="150" Margin="0,6,0,0">
-                    <ListBox.ItemTemplate>
-                        <DataTemplate>
-                            <TextBlock Text="{Binding}" FontSize="12" TextWrapping="Wrap" />
-                        </DataTemplate>
-                    </ListBox.ItemTemplate>
-                </ListBox>
+                            <TextBlock FontWeight="SemiBold" Text="失败页" Margin="0,12,0,0" />
+                            <ListBox ItemsSource="{Binding Failures}" Height="160" Margin="0,6,0,0">
+                                <ListBox.ItemTemplate>
+                                    <DataTemplate>
+                                        <TextBlock Text="{Binding}" FontSize="12" TextWrapping="Wrap" />
+                                    </DataTemplate>
+                                </ListBox.ItemTemplate>
+                            </ListBox>
+                        </StackPanel>
+                    </TabItem>
+
+                    <TabItem Header="预览">
+                        <StackPanel>
+                            <TextBlock FontWeight="SemiBold" Text="预览" />
+                            <StackPanel Orientation="Horizontal" Margin="0,6,0,0">
+                                <Button Content="上一页" Command="{Binding PreviewPrevCommand}" />
+                                <Button Content="下一页" Command="{Binding PreviewNextCommand}" Margin="6,0,0,0" />
+                                <TextBox Text="{Binding PreviewPageNumber, UpdateSourceTrigger=PropertyChanged}" Width="60" Margin="12,0,0,0" />
+                                <TextBlock Text="/" Margin="4,0" VerticalAlignment="Center" />
+                                <TextBlock Text="{Binding PdfPageCount}" VerticalAlignment="Center" />
+                                <Button Content="刷新预览" Command="{Binding RenderPreviewCommand}" Margin="12,0,0,0" />
+                            </StackPanel>
+                            <StackPanel Orientation="Horizontal" Margin="0,6,0,0">
+                                <CheckBox Content="显示裁切后" IsChecked="{Binding PreviewShowCropped}" />
+                                <CheckBox Content="显示表格框" IsChecked="{Binding PreviewShowTables}" Margin="12,0,0,0" />
+                                <CheckBox Content="显示裁切区域" IsChecked="{Binding PreviewShowCropOverlay}" Margin="12,0,0,0" />
+                            </StackPanel>
+                            <TextBlock Text="{Binding PreviewStatus}" Foreground="#666" FontSize="12" Margin="0,6,0,0" />
+
+                            <Border BorderBrush="#EEE" BorderThickness="1" CornerRadius="4" Margin="0,8,0,0" Height="360">
+                                <ScrollViewer HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Auto">
+                                    <Viewbox Stretch="Uniform">
+                                        <Grid Width="{Binding PreviewImageWidth}" Height="{Binding PreviewImageHeight}">
+                                            <Image Source="{Binding PreviewImage}" Width="{Binding PreviewImageWidth}" Height="{Binding PreviewImageHeight}" Stretch="Fill" />
+                                            <ItemsControl ItemsSource="{Binding PreviewOverlays}">
+                                                <ItemsControl.ItemsPanel>
+                                                    <ItemsPanelTemplate>
+                                                        <Canvas />
+                                                    </ItemsPanelTemplate>
+                                                </ItemsControl.ItemsPanel>
+                                                <ItemsControl.ItemContainerStyle>
+                                                    <Style TargetType="ContentPresenter">
+                                                        <Setter Property="Canvas.Left" Value="{Binding X}" />
+                                                        <Setter Property="Canvas.Top" Value="{Binding Y}" />
+                                                    </Style>
+                                                </ItemsControl.ItemContainerStyle>
+                                                <ItemsControl.ItemTemplate>
+                                                    <DataTemplate>
+                                                        <Rectangle Width="{Binding Width}" Height="{Binding Height}" Stroke="{Binding Stroke}" Fill="{Binding Fill}"
+                                                                   StrokeThickness="{Binding StrokeThickness}" />
+                                                    </DataTemplate>
+                                                </ItemsControl.ItemTemplate>
+                                            </ItemsControl>
+                                        </Grid>
+                                    </Viewbox>
+                                </ScrollViewer>
+                            </Border>
+                        </StackPanel>
+                    </TabItem>
+                </TabControl>
             </StackPanel>
         </Border>
     </Grid>

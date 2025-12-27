@@ -20,7 +20,14 @@ public sealed class PdfiumRenderer : IPdfRenderer
         var bitmap = new System.Drawing.Bitmap(width, height, System.Drawing.Imaging.PixelFormat.Format24bppRgb);
         using var gfx = System.Drawing.Graphics.FromImage(bitmap);
         gfx.Clear(System.Drawing.Color.White);
-        document.Render(pageIndex0Based, gfx, 0, 0, width, height, PdfRenderFlags.Annotations);
+        var dpiF = (float)dpi;
+        document.Render(
+            pageIndex0Based,
+            gfx,
+            dpiF,
+            dpiF,
+            new System.Drawing.Rectangle(0, 0, width, height),
+            PdfRenderFlags.Annotations);
         return bitmap;
     }
 }

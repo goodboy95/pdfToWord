@@ -36,7 +36,10 @@
 - MainWindow.xaml：主界面布局与控件绑定。
 - MainWindow.xaml.cs：主窗体代码隐藏，设置 DataContext。
 - appsettings.json：默认配置项。
+- Models/PreviewOverlay.cs：预览叠加层矩形模型（裁切遮罩/表格框）。
 - Services/DpapiApiKeyStore.cs：使用 DPAPI 加密保存 Gemini API Key。
+- Services/BitmapSourceHelper.cs：System.Drawing.Bitmap 转 WPF ImageSource 辅助。
+- Services/CompositeLogSink.cs：组合日志写入（UI + 文件）。
 - Services/UiLogSink.cs：UI 日志接收器。
 - ViewModels/MainViewModel.cs：主界面 MVVM 逻辑与命令。
 
@@ -70,6 +73,7 @@
 - Gemini/GeminiPrompts.cs：Gemini Prompt 模板。
 - Gemini/ImageEncoder.cs：图像编码与压缩。
 - Docx/OpenXmlDocxWriter.cs：OpenXML 写入 docx 实现。
+- Logging/FileLogSink.cs：诊断日志写入临时文件。
 - Storage/TempStorage.cs：临时目录与诊断文件管理。
 
 ## tests/Pdf2Word.Tests/

@@ -5,12 +5,19 @@ using Pdf2Word.Core.Models.Ir;
 using Pdf2Word.Core.Options;
 using Pdf2Word.Core.Validation;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using System.IO.Compression;
 
 namespace Pdf2Word.Core.Services;
 
 public sealed class ConversionService : IConversionService
 {
+    private static readonly JsonSerializerOptions JsonOptions = new()
+    {
+        WriteIndented = true,
+        Converters = { new JsonStringEnumConverter() }
+    };
+
     private readonly IPdfRenderer _renderer;
     private readonly IPageImagePipeline _pipeline;
     private readonly ITableEngine _tableEngine;
@@ -59,11 +66,27 @@ public sealed class ConversionService : IConversionService
         var outputPath = request.OutputPath;
         if (string.IsNullOrWhiteSpace(outputPath))
         {
+            if (request.Options.Output.FileNameMode == OutputFileNameMode.Custom)
+            {
+                return Fail(result, "E_CFG_OUTPUT_PATH_REQUIRED", "未指定输出路径。", ErrorSeverity.Recoverable, JobStage.Init);
+            }
+
             var dir = string.IsNullOrWhiteSpace(request.Options.Output.OutputDirectory)
                 ? Path.GetDirectoryName(request.PdfPath) ?? string.Empty
                 : request.Options.Output.OutputDirectory;
             var baseName = Path.GetFileNameWithoutExtension(request.PdfPath);
             outputPath = Path.Combine(dir, baseName + "_converted.docx");
+        }
+
+        if (!request.Options.Output.Overwrite && File.Exists(outputPath))
+        {
+            return Fail(result, "E_OUTPUT_EXISTS", "输出文件已存在。", ErrorSeverity.Recoverable, JobStage.Init);
+        }
+
+        var outputDir = Path.GetDirectoryName(outputPath);
+        if (!string.IsNullOrWhiteSpace(outputDir))
+        {
+            Directory.CreateDirectory(outputDir);
         }
 
         result.OutputPath = outputPath;
@@ -95,6 +118,18 @@ public sealed class ConversionService : IConversionService
         }
 
         _tempStorage.EnsureCreated();
+        if (request.Options.Diagnostics.KeepTempFiles)
+        {
+            var meta = new
+            {
+                startedAtUtc = startedAt,
+                pdfPath = request.PdfPath,
+                outputPath,
+                pageRange = request.PageRangeText,
+                options = request.Options
+            };
+            WriteJson(_tempStorage.GetIrPath("meta.json"), meta);
+        }
 
         try
         {
@@ -121,13 +156,18 @@ public sealed class ConversionService : IConversionService
             var pageResults = new List<PageIr>();
             var failures = new System.Collections.Concurrent.ConcurrentBag<FailureInfo>();
             var completed = 0;
+            var failFastTriggered = false;
+            using var failFastCts = request.Options.Validation.FailFast
+                ? CancellationTokenSource.CreateLinkedTokenSource(ct)
+                : null;
+            var effectiveToken = failFastCts?.Token ?? ct;
 
             var tasks = pageRange.Pages.Select(async pageNumber =>
             {
-                await semaphore.WaitAsync(ct).ConfigureAwait(false);
+                await semaphore.WaitAsync(effectiveToken).ConfigureAwait(false);
                 try
                 {
-                    var pageIr = await ProcessPageAsync(request, pageNumber, totalPages, progress, geminiSemaphore, failures, ct).ConfigureAwait(false);
+                    var pageIr = await ProcessPageAsync(request, pageNumber, totalPages, progress, geminiSemaphore, failures, effectiveToken).ConfigureAwait(false);
                     if (pageIr != null)
                     {
                         lock (pageResults)
@@ -149,6 +189,12 @@ public sealed class ConversionService : IConversionService
                         Message = "页面处理完成"
                     });
                 }
+
+                if (request.Options.Validation.FailFast && !failures.IsEmpty)
+                {
+                    failFastTriggered = true;
+                    failFastCts?.Cancel();
+                }
             }).ToList();
 
             try
@@ -157,7 +203,7 @@ public sealed class ConversionService : IConversionService
             }
             catch (OperationCanceledException)
             {
-                result.Status = JobStatus.Canceled;
+                result.Status = failFastTriggered ? JobStatus.Failed : JobStatus.Canceled;
                 result.Failures = failures.ToList();
                 result.Elapsed = DateTime.UtcNow - startedAt;
                 return result;
@@ -221,6 +267,7 @@ public sealed class ConversionService : IConversionService
     private async Task<PageIr?> ProcessPageAsync(ConvertJobRequest request, int pageNumber, int totalPages, IProgress<JobProgress> progress,
         SemaphoreSlim geminiSemaphore, System.Collections.Concurrent.ConcurrentBag<FailureInfo> failures, CancellationToken ct)
     {
+        var validationEnabled = request.Options.Validation.Enable;
         progress.Report(new JobProgress { TotalPages = totalPages, CompletedPages = 0, CurrentPage = pageNumber, Stage = JobStage.PdfRender, Message = "渲染页面" });
         System.Drawing.Bitmap rendered;
         try
@@ -231,7 +278,7 @@ public sealed class ConversionService : IConversionService
         catch (Exception ex)
         {
             _logger.LogError(ex, "Render page {Page}", pageNumber);
-            failures.Add(new FailureInfo { PageNumber = pageNumber, ErrorCode = "E_PDF_RENDER_FAILED", Message = "页面渲染失败", Severity = ErrorSeverity.Recoverable, Stage = JobStage.PdfRender });
+            failures.Add(new FailureInfo { PageNumber = pageNumber, ErrorCode = "E_PDF_RENDER_FAILED", Message = "页面渲染失败", Severity = ErrorSeverity.Recoverable, Stage = JobStage.PdfRender, Attempt = 1 });
             return null;
         }
 
@@ -258,12 +305,14 @@ public sealed class ConversionService : IConversionService
         catch (Exception ex)
         {
             _logger.LogError(ex, "Preprocess page {Page}", pageNumber);
-            failures.Add(new FailureInfo { PageNumber = pageNumber, ErrorCode = "E_IMG_PREPROCESS_FAILED", Message = "图像预处理失败", Severity = ErrorSeverity.Recoverable, Stage = JobStage.Preprocess });
+            failures.Add(new FailureInfo { PageNumber = pageNumber, ErrorCode = "E_IMG_PREPROCESS_FAILED", Message = "图像预处理失败", Severity = ErrorSeverity.Recoverable, Stage = JobStage.Preprocess, Attempt = 1 });
             return null;
         }
 
-        var tableBlocks = new List<TableBlockIr>();
-        var fallbackParagraphs = new List<ParagraphDto>();
+        try
+        {
+            var tableBlocks = new List<TableBlockIr>();
+            var fallbackParagraphs = new List<ParagraphDto>();
 
         IReadOnlyList<TableDetection> tables = Array.Empty<TableDetection>();
         if (request.Options.TableDetect.Enable)
@@ -279,14 +328,38 @@ public sealed class ConversionService : IConversionService
                     foreach (var table in tables)
                     {
                         SaveBitmap(table.TableImageColor, _tempStorage.GetTableImagePath(pageNumber, tableIdx, "color"));
+                        SaveBitmap(table.TableBinary, _tempStorage.GetTableImagePath(pageNumber, tableIdx, "binary"));
                         tableIdx++;
+                    }
+
+                    if (tables.Count > 0)
+                    {
+                        var snapshot = tables.Select(t => new
+                        {
+                            t.DebugId,
+                            t.TableBBoxInPage,
+                            t.NCols,
+                            t.NRows,
+                            t.ColLinesX,
+                            t.RowLinesY,
+                            Cells = t.Cells.Select(c => new
+                            {
+                                c.Id,
+                                c.Row,
+                                c.Col,
+                                c.Rowspan,
+                                c.Colspan,
+                                c.BBoxInTable
+                            })
+                        });
+                        WriteJson(_tempStorage.GetIrPath($"p{pageNumber:000}_tables.json"), snapshot);
                     }
                 }
             }
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Table detection failed on page {Page}", pageNumber);
-                failures.Add(new FailureInfo { PageNumber = pageNumber, ErrorCode = "E_TABLE_DETECT_FAILED", Message = "表格检测失败", Severity = ErrorSeverity.Recoverable, Stage = JobStage.TableDetect });
+                failures.Add(new FailureInfo { PageNumber = pageNumber, ErrorCode = "E_TABLE_DETECT_FAILED", Message = "表格检测失败", Severity = ErrorSeverity.Recoverable, Stage = JobStage.TableDetect, Attempt = 1 });
             }
         }
 
@@ -295,10 +368,10 @@ public sealed class ConversionService : IConversionService
         {
             progress.Report(new JobProgress { TotalPages = totalPages, CurrentPage = pageNumber, Stage = JobStage.TableGrid, Message = "表格结构" });
             var tableIr = TableIrBuilder.Build(table);
-            var validation = TableStructureValidator.Validate(tableIr);
-            if (!validation.IsValid)
+            var validation = validationEnabled ? TableStructureValidator.Validate(tableIr) : new TableStructureValidationResult { IsValid = true };
+            if (validationEnabled && !validation.IsValid)
             {
-                failures.Add(new FailureInfo { PageNumber = pageNumber, TableIndex = tableIndex, ErrorCode = validation.ErrorCode ?? "E_TABLE_GRID_CONFLICT", Message = validation.Message ?? "表格结构冲突", Severity = ErrorSeverity.Recoverable, Stage = JobStage.TableGrid });
+                failures.Add(new FailureInfo { PageNumber = pageNumber, TableIndex = tableIndex, ErrorCode = validation.ErrorCode ?? "E_TABLE_GRID_CONFLICT", Message = validation.Message ?? "表格结构冲突", Severity = ErrorSeverity.Recoverable, Stage = JobStage.TableGrid, Attempt = 1 });
                 if (request.Options.Validation.TableStructureBad == TableFallbackPolicy.FallbackTextTable && request.Options.TableDetect.EnableTextTableFallback)
                 {
                     var lines = await GeminiTableAsLinesAsync(request, table, geminiSemaphore, failures, pageNumber, tableIndex, ct).ConfigureAwait(false);
@@ -316,6 +389,17 @@ public sealed class ConversionService : IConversionService
             var ocrTexts = await GeminiTableCellsAsync(request, table, geminiSemaphore, failures, pageNumber, tableIndex, ct).ConfigureAwait(false);
             if (ocrTexts == null)
             {
+                if (request.Options.Validation.TableStructureOkTextBad == TableFallbackPolicy.FallbackTextTable && request.Options.TableDetect.EnableTextTableFallback)
+                {
+                    var lines = await GeminiTableAsLinesAsync(request, table, geminiSemaphore, failures, pageNumber, tableIndex, ct).ConfigureAwait(false);
+                    if (lines.Count > 0)
+                    {
+                        fallbackParagraphs.Add(new ParagraphDto { Role = "body", Text = string.Join("\n", lines) });
+                        tableIndex++;
+                        continue;
+                    }
+                }
+
                 tableIr = TableIrBuilder.Build(table, null);
             }
             else
@@ -327,25 +411,52 @@ public sealed class ConversionService : IConversionService
             tableIndex++;
         }
 
+        DisposeTableImages(tables);
+
         progress.Report(new JobProgress { TotalPages = totalPages, CurrentPage = pageNumber, Stage = JobStage.GeminiPageOcr, Message = "正文识别" });
         var masked = _tableEngine.MaskTables(bundle.ColorForGemini, tables.Select(t => t.TableBBoxInPage));
+        if (request.Options.Diagnostics.KeepTempFiles)
+        {
+            SaveBitmap(masked, _tempStorage.GetPageImagePath(pageNumber, "masked"));
+        }
         var paragraphs = await GeminiPageParagraphsAsync(request, masked, geminiSemaphore, failures, pageNumber, ct).ConfigureAwait(false);
+        masked.Dispose();
         if (fallbackParagraphs.Count > 0)
         {
             paragraphs.InsertRange(0, fallbackParagraphs);
         }
 
-        foreach (var p in paragraphs)
+        var sanitizedParagraphs = paragraphs.Select(p => new ParagraphDto
         {
-            p.Text = TextCleaner.RemoveControlChars(p.Text);
+            Role = p.Role,
+            Text = TextCleaner.RemoveControlChars(p.Text)
+        }).ToList();
+
+        var pageIr = IrBuilder.BuildPage(pageNumber, bundle.OriginalSizePx, bundle.CroppedSizePx, bundle.CropInfo, sanitizedParagraphs, tableBlocks, "GeminiText");
+        if (pageIr.Blocks.Count == 0 && validationEnabled)
+        {
+            failures.Add(new FailureInfo
+            {
+                PageNumber = pageNumber,
+                ErrorCode = "E_PAGE_EMPTY",
+                Message = "页面未识别到任何内容",
+                Severity = ErrorSeverity.Recoverable,
+                Stage = JobStage.GeminiPageOcr,
+                Attempt = 1
+            });
+            return null;
         }
 
-        var pageIr = IrBuilder.BuildPage(pageNumber, bundle.OriginalSizePx, bundle.CroppedSizePx, bundle.CropInfo, paragraphs, tableBlocks, "GeminiText");
         if (request.Options.Diagnostics.KeepTempFiles)
         {
             WriteJson(_tempStorage.GetIrPath($"p{pageNumber:000}_ir.json"), pageIr);
         }
         return pageIr;
+        }
+        finally
+        {
+            DisposeBundle(bundle);
+        }
     }
 
     private async Task<Dictionary<string, string>?> GeminiTableCellsAsync(ConvertJobRequest request, TableDetection table, SemaphoreSlim geminiSemaphore, System.Collections.Concurrent.ConcurrentBag<FailureInfo> failures, int pageNumber, int tableIndex, CancellationToken ct)
@@ -365,6 +476,7 @@ public sealed class ConversionService : IConversionService
         }
 
         var maxRetries = Math.Max(0, request.Options.Gemini.MaxRetryCount);
+        var validationEnabled = request.Options.Validation.Enable;
         for (var attempt = 0; attempt <= maxRetries; attempt++)
         {
             await geminiSemaphore.WaitAsync(ct).ConfigureAwait(false);
@@ -372,27 +484,75 @@ public sealed class ConversionService : IConversionService
             {
                 var strict = attempt > 0;
                 var result = await _gemini.RecognizeTableCellsAsync(table.TableImageColor, cells, ct, strict, attempt + 1).ConfigureAwait(false);
+                WriteRawJsonIfNeeded(request, _tempStorage.GetIrPath($"p{pageNumber:000}_t{tableIndex:00}_cells_a{attempt + 1}.json"), result.RawJson);
                 var cleaned = new Dictionary<string, string>();
                 foreach (var kvp in result.TextById)
                 {
                     cleaned[kvp.Key] = TextCleaner.RemoveControlChars(kvp.Value ?? string.Empty);
                 }
-                var missingRate = MissingRate(cells.Select(c => c.Id), result.TextById.Keys);
-                if (missingRate <= request.Options.Gemini.TableMissingIdThreshold)
+                if (!validationEnabled)
                 {
                     return cleaned;
                 }
 
-                failures.Add(new FailureInfo { PageNumber = pageNumber, TableIndex = tableIndex, ErrorCode = "E_GEMINI_OCR_MISSING_IDS", Message = "表格识别缺失单元格", Severity = ErrorSeverity.Recoverable, Stage = JobStage.GeminiTableOcr });
+                var missingRate = MissingRate(cells.Select(c => c.Id), result.TextById.Keys);
+                var emptyCount = cleaned.Values.Count(v => string.IsNullOrWhiteSpace(v));
+                var emptyRate = cells.Count == 0 ? 0 : (double)emptyCount / cells.Count;
+                if (missingRate <= request.Options.Gemini.TableMissingIdThreshold && emptyRate <= request.Options.Gemini.TableEmptyTextRateThreshold)
+                {
+                    return cleaned;
+                }
+
+                var errorCode = missingRate > request.Options.Gemini.TableMissingIdThreshold
+                    ? "E_GEMINI_OCR_MISSING_IDS"
+                    : "E_GEMINI_OCR_EMPTY_TEXT";
+                failures.Add(new FailureInfo
+                {
+                    PageNumber = pageNumber,
+                    TableIndex = tableIndex,
+                    ErrorCode = errorCode,
+                    Message = "表格识别结果不完整",
+                    Severity = ErrorSeverity.Recoverable,
+                    Stage = JobStage.GeminiTableOcr,
+                    Attempt = attempt + 1
+                });
+            }
+            catch (JsonException ex)
+            {
+                _logger.LogError(ex, "Gemini table OCR returned invalid JSON");
+                failures.Add(new FailureInfo
+                {
+                    PageNumber = pageNumber,
+                    TableIndex = tableIndex,
+                    ErrorCode = "E_GEMINI_JSON_INVALID",
+                    Message = "表格识别返回非 JSON",
+                    Severity = ErrorSeverity.Recoverable,
+                    Stage = JobStage.GeminiTableOcr,
+                    Attempt = attempt + 1
+                });
             }
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Gemini table OCR failed");
-                failures.Add(new FailureInfo { PageNumber = pageNumber, TableIndex = tableIndex, ErrorCode = "E_GEMINI_TIMEOUT", Message = "表格识别失败", Severity = ErrorSeverity.Recoverable, Stage = JobStage.GeminiTableOcr });
+                failures.Add(new FailureInfo
+                {
+                    PageNumber = pageNumber,
+                    TableIndex = tableIndex,
+                    ErrorCode = "E_GEMINI_TIMEOUT",
+                    Message = "表格识别失败",
+                    Severity = ErrorSeverity.Recoverable,
+                    Stage = JobStage.GeminiTableOcr,
+                    Attempt = attempt + 1
+                });
             }
             finally
             {
                 geminiSemaphore.Release();
+            }
+
+            if (attempt < maxRetries)
+            {
+                await DelayWithBackoffAsync(request, attempt, ct).ConfigureAwait(false);
             }
         }
 
@@ -408,19 +568,48 @@ public sealed class ConversionService : IConversionService
             try
             {
                 var result = await _gemini.RecognizeTableAsLinesAsync(table.TableImageColor, ct, attempt + 1).ConfigureAwait(false);
+                WriteRawJsonIfNeeded(request, _tempStorage.GetIrPath($"p{pageNumber:000}_t{tableIndex:00}_lines_a{attempt + 1}.json"), result.RawJson);
                 if (result.Lines.Count > 0)
                 {
                     return result.Lines.Select(TextCleaner.RemoveControlChars).ToList();
                 }
             }
+            catch (JsonException ex)
+            {
+                _logger.LogError(ex, "Gemini table fallback returned invalid JSON");
+                failures.Add(new FailureInfo
+                {
+                    PageNumber = pageNumber,
+                    TableIndex = tableIndex,
+                    ErrorCode = "E_GEMINI_JSON_INVALID",
+                    Message = "表格降级返回非 JSON",
+                    Severity = ErrorSeverity.Recoverable,
+                    Stage = JobStage.GeminiTableOcr,
+                    Attempt = attempt + 1
+                });
+            }
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Gemini table fallback failed");
-                failures.Add(new FailureInfo { PageNumber = pageNumber, TableIndex = tableIndex, ErrorCode = "E_GEMINI_TIMEOUT", Message = "表格降级识别失败", Severity = ErrorSeverity.Recoverable, Stage = JobStage.GeminiTableOcr });
+                failures.Add(new FailureInfo
+                {
+                    PageNumber = pageNumber,
+                    TableIndex = tableIndex,
+                    ErrorCode = "E_GEMINI_TIMEOUT",
+                    Message = "表格降级识别失败",
+                    Severity = ErrorSeverity.Recoverable,
+                    Stage = JobStage.GeminiTableOcr,
+                    Attempt = attempt + 1
+                });
             }
             finally
             {
                 geminiSemaphore.Release();
+            }
+
+            if (attempt < maxRetries)
+            {
+                await DelayWithBackoffAsync(request, attempt, ct).ConfigureAwait(false);
             }
         }
 
@@ -430,6 +619,7 @@ public sealed class ConversionService : IConversionService
     private async Task<List<ParagraphDto>> GeminiPageParagraphsAsync(ConvertJobRequest request, System.Drawing.Bitmap image, SemaphoreSlim geminiSemaphore, System.Collections.Concurrent.ConcurrentBag<FailureInfo> failures, int pageNumber, CancellationToken ct)
     {
         var maxRetries = Math.Max(0, request.Options.Gemini.MaxRetryCount);
+        var validationEnabled = request.Options.Validation.Enable;
         for (var attempt = 0; attempt <= maxRetries; attempt++)
         {
             await geminiSemaphore.WaitAsync(ct).ConfigureAwait(false);
@@ -437,26 +627,66 @@ public sealed class ConversionService : IConversionService
             {
                 var strict = attempt > 0;
                 var result = await _gemini.RecognizePageParagraphsAsync(image, ct, strict, attempt + 1).ConfigureAwait(false);
+                WriteRawJsonIfNeeded(request, _tempStorage.GetIrPath($"p{pageNumber:000}_page_a{attempt + 1}.json"), result.RawJson);
+                if (!validationEnabled)
+                {
+                    return result.Paragraphs;
+                }
+
                 var totalChars = result.Paragraphs.Sum(p => p.Text?.Length ?? 0);
                 if (result.Paragraphs.Count > 0 && totalChars >= request.Options.Gemini.MinPageTextCharCount)
                 {
                     return result.Paragraphs;
                 }
 
-                failures.Add(new FailureInfo { PageNumber = pageNumber, ErrorCode = "E_GEMINI_OCR_EMPTY_TEXT", Message = "正文识别为空", Severity = ErrorSeverity.Recoverable, Stage = JobStage.GeminiPageOcr });
+                failures.Add(new FailureInfo
+                {
+                    PageNumber = pageNumber,
+                    ErrorCode = "E_GEMINI_OCR_EMPTY_TEXT",
+                    Message = "正文识别为空",
+                    Severity = ErrorSeverity.Recoverable,
+                    Stage = JobStage.GeminiPageOcr,
+                    Attempt = attempt + 1
+                });
+            }
+            catch (JsonException ex)
+            {
+                _logger.LogError(ex, "Gemini page OCR returned invalid JSON");
+                failures.Add(new FailureInfo
+                {
+                    PageNumber = pageNumber,
+                    ErrorCode = "E_GEMINI_JSON_INVALID",
+                    Message = "正文识别返回非 JSON",
+                    Severity = ErrorSeverity.Recoverable,
+                    Stage = JobStage.GeminiPageOcr,
+                    Attempt = attempt + 1
+                });
             }
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Gemini page OCR failed");
-                failures.Add(new FailureInfo { PageNumber = pageNumber, ErrorCode = "E_GEMINI_TIMEOUT", Message = "正文识别失败", Severity = ErrorSeverity.Recoverable, Stage = JobStage.GeminiPageOcr });
+                failures.Add(new FailureInfo
+                {
+                    PageNumber = pageNumber,
+                    ErrorCode = "E_GEMINI_TIMEOUT",
+                    Message = "正文识别失败",
+                    Severity = ErrorSeverity.Recoverable,
+                    Stage = JobStage.GeminiPageOcr,
+                    Attempt = attempt + 1
+                });
             }
             finally
             {
                 geminiSemaphore.Release();
             }
+
+            if (attempt < maxRetries)
+            {
+                await DelayWithBackoffAsync(request, attempt, ct).ConfigureAwait(false);
+            }
         }
 
-        if (request.Options.Validation.TextEmpty == TextFallbackPolicy.SingleParagraph)
+        if (validationEnabled && request.Options.Validation.TextEmpty == TextFallbackPolicy.SingleParagraph)
         {
             return await GeminiPageSingleParagraphAsync(request, image, geminiSemaphore, failures, pageNumber, ct).ConfigureAwait(false);
         }
@@ -473,19 +703,46 @@ public sealed class ConversionService : IConversionService
             try
             {
                 var result = await _gemini.RecognizePageAsSingleTextAsync(image, ct, attempt + 1).ConfigureAwait(false);
+                WriteRawJsonIfNeeded(request, _tempStorage.GetIrPath($"p{pageNumber:000}_page_fallback_a{attempt + 1}.json"), result.RawJson);
                 if (!string.IsNullOrWhiteSpace(result.Text))
                 {
                     return new List<ParagraphDto> { new ParagraphDto { Role = "body", Text = TextCleaner.RemoveControlChars(result.Text) } };
                 }
             }
+            catch (JsonException ex)
+            {
+                _logger.LogError(ex, "Gemini page fallback returned invalid JSON");
+                failures.Add(new FailureInfo
+                {
+                    PageNumber = pageNumber,
+                    ErrorCode = "E_GEMINI_JSON_INVALID",
+                    Message = "正文降级返回非 JSON",
+                    Severity = ErrorSeverity.Recoverable,
+                    Stage = JobStage.GeminiPageOcr,
+                    Attempt = attempt + 1
+                });
+            }
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Gemini page fallback failed");
-                failures.Add(new FailureInfo { PageNumber = pageNumber, ErrorCode = "E_GEMINI_TIMEOUT", Message = "正文降级识别失败", Severity = ErrorSeverity.Recoverable, Stage = JobStage.GeminiPageOcr });
+                failures.Add(new FailureInfo
+                {
+                    PageNumber = pageNumber,
+                    ErrorCode = "E_GEMINI_TIMEOUT",
+                    Message = "正文降级识别失败",
+                    Severity = ErrorSeverity.Recoverable,
+                    Stage = JobStage.GeminiPageOcr,
+                    Attempt = attempt + 1
+                });
             }
             finally
             {
                 geminiSemaphore.Release();
+            }
+
+            if (attempt < maxRetries)
+            {
+                await DelayWithBackoffAsync(request, attempt, ct).ConfigureAwait(false);
             }
         }
 
@@ -509,14 +766,14 @@ public sealed class ConversionService : IConversionService
     private ConvertResult Fail(ConvertResult result, string code, string message, ErrorSeverity severity, JobStage stage, List<FailureInfo>? failures = null)
     {
         result.Status = JobStatus.Failed;
-        var info = new FailureInfo { ErrorCode = code, Message = message, Severity = severity, Stage = stage };
+        var info = new FailureInfo { ErrorCode = code, Message = message, Severity = severity, Stage = stage, Attempt = 1 };
         result.Failures = failures ?? new List<FailureInfo>();
         result.Failures.Add(info);
         PublishLog(stage, severity, info.PageNumber, info.TableIndex, message, code);
         return result;
     }
 
-    private void PublishLog(JobStage stage, ErrorSeverity severity, int? pageNumber, int? tableIndex, string message, string? errorCode = null)
+    private void PublishLog(JobStage stage, ErrorSeverity severity, int? pageNumber, int? tableIndex, string message, string? errorCode = null, int attempt = 1)
     {
         _logSink?.Publish(new LogEntry
         {
@@ -525,8 +782,55 @@ public sealed class ConversionService : IConversionService
             PageNumber = pageNumber,
             TableIndex = tableIndex,
             Message = message,
-            ErrorCode = errorCode ?? string.Empty
+            ErrorCode = errorCode ?? string.Empty,
+            Attempt = attempt
         });
+    }
+
+    private static void DisposeTableImages(IEnumerable<TableDetection> tables)
+    {
+        foreach (var table in tables)
+        {
+            table.TableImageColor.Dispose();
+            table.TableBinary.Dispose();
+        }
+    }
+
+    private static void DisposeBundle(PageImageBundle bundle)
+    {
+        bundle.OriginalColor.Dispose();
+        bundle.CroppedColor.Dispose();
+        bundle.Gray.Dispose();
+        bundle.ColorForGemini.Dispose();
+        if (!ReferenceEquals(bundle.Binary, bundle.BinaryForTable))
+        {
+            bundle.BinaryForTable.Dispose();
+        }
+        bundle.Binary.Dispose();
+    }
+
+    private static Task DelayWithBackoffAsync(ConvertJobRequest request, int attempt, CancellationToken ct)
+    {
+        var baseMs = Math.Max(0, request.Options.Gemini.BackoffBaseMs);
+        if (baseMs == 0)
+        {
+            return Task.CompletedTask;
+        }
+
+        var delay = baseMs * Math.Pow(2, attempt);
+        delay = Math.Min(delay, 5000);
+        return Task.Delay((int)delay, ct);
+    }
+
+    private void WriteRawJsonIfNeeded(ConvertJobRequest request, string path, string? rawJson)
+    {
+        if (!request.Options.Diagnostics.SaveRawGeminiJson || string.IsNullOrWhiteSpace(rawJson))
+        {
+            return;
+        }
+
+        Directory.CreateDirectory(Path.GetDirectoryName(path) ?? string.Empty);
+        File.WriteAllText(path, rawJson);
     }
 
     private static void SaveBitmap(System.Drawing.Bitmap bitmap, string path)
@@ -538,7 +842,7 @@ public sealed class ConversionService : IConversionService
     private static void WriteJson<T>(string path, T payload)
     {
         Directory.CreateDirectory(Path.GetDirectoryName(path) ?? string.Empty);
-        var json = JsonSerializer.Serialize(payload, new JsonSerializerOptions { WriteIndented = true });
+        var json = JsonSerializer.Serialize(payload, JsonOptions);
         File.WriteAllText(path, json);
     }
 
@@ -546,7 +850,7 @@ public sealed class ConversionService : IConversionService
     {
         try
         {
-            var zipPath = jobRoot.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) + \".zip\";
+            var zipPath = jobRoot.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) + ".zip";
             if (File.Exists(zipPath))
             {
                 File.Delete(zipPath);

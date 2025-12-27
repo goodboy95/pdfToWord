@@ -233,12 +233,16 @@ public sealed class GeminiClient : IGeminiClient
     private static PageTextFallbackResult ParsePageFallback(string outputText, string rawJson)
     {
         using var doc = JsonDocument.Parse(outputText);
-        var result = new PageTextFallbackResult { RawJson = rawJson };
+        var textValue = string.Empty;
         if (doc.RootElement.TryGetProperty("text", out var text))
         {
-            result.Text = text.GetString() ?? string.Empty;
+            textValue = text.GetString() ?? string.Empty;
         }
 
-        return result;
+        return new PageTextFallbackResult
+        {
+            RawJson = rawJson,
+            Text = textValue
+        };
     }
 }

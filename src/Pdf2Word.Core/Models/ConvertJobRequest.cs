@@ -27,4 +27,5 @@ public sealed class FailureInfo
     public string Message { get; set; } = string.Empty;
     public ErrorSeverity Severity { get; set; }
     public JobStage Stage { get; set; }
+    public int Attempt { get; set; } = 1;
 }

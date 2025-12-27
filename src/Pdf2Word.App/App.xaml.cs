@@ -1,3 +1,4 @@
+using System.Net.Http;
 using System.Windows;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -8,13 +9,14 @@ using Pdf2Word.Core.Services;
 using Pdf2Word.Infrastructure.Docx;
 using Pdf2Word.Infrastructure.Gemini;
 using Pdf2Word.Infrastructure.ImageProcessing;
+using Pdf2Word.Infrastructure.Logging;
 using Pdf2Word.Infrastructure.Pdf;
 using Pdf2Word.Infrastructure.Storage;
 using Pdf2Word.Infrastructure.Table;
 using Pdf2Word.App.Services;
 using Pdf2Word.App.ViewModels;
 
-namespace Pdf2Word;
+namespace Pdf2Word.App;
 
 public partial class App : Application
 {
@@ -42,7 +44,10 @@ public partial class App : Application
                 services.AddSingleton<ITempStorage, TempStorage>();
                 services.AddSingleton<IApiKeyStore, DpapiApiKeyStore>();
                 services.AddSingleton<UiLogSink>();
-                services.AddSingleton<ILogSink>(sp => sp.GetRequiredService<UiLogSink>());
+                services.AddSingleton<FileLogSink>();
+                services.AddSingleton<ILogSink>(sp => new CompositeLogSink(
+                    sp.GetRequiredService<UiLogSink>(),
+                    sp.GetRequiredService<FileLogSink>()));
                 services.AddHttpClient();
                 services.AddSingleton<IGeminiClient>(sp =>
                 {
