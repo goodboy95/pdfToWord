@@ -84,7 +84,16 @@ public sealed partial class MainViewModel : ObservableObject
     private bool _keepDiagnostics;
 
     [ObservableProperty]
+    private string _geminiEndpointUrl = string.Empty;
+
+    [ObservableProperty]
     private string _geminiApiKey = string.Empty;
+
+    [ObservableProperty]
+    private string _geminiEndpointError = string.Empty;
+
+    [ObservableProperty]
+    private bool _hasGeminiEndpointError;
 
     [ObservableProperty]
     private bool _isBusy;
@@ -155,7 +164,7 @@ public sealed partial class MainViewModel : ObservableObject
     [ObservableProperty]
     private bool _previewShowCropOverlay = true;
 
-    public bool HasInputErrors => HasPageRangeError || HasCropError;
+    public bool HasInputErrors => HasPageRangeError || HasCropError || HasGeminiEndpointError;
 
     public bool CanStart => !IsBusy && !string.IsNullOrWhiteSpace(PdfPath) && !HasInputErrors;
 
@@ -182,12 +191,14 @@ public sealed partial class MainViewModel : ObservableObject
         Concurrency = defaults.Runtime.PageConcurrency;
         DeskewEnabled = defaults.Preprocess.EnableDeskew;
         KeepDiagnostics = defaults.Diagnostics.KeepTempFiles;
+        GeminiEndpointUrl = defaults.Gemini.Endpoint;
         GeminiApiKey = apiKeyStore.GetApiKey() ?? string.Empty;
         PreviewShowCropped = false;
         PreviewShowTables = false;
 
         UpdateHeaderFooterEnabled();
         ValidateCrop();
+        ValidateGeminiEndpoint();
 
         logSink.LogPublished += OnLogPublished;
     }
@@ -212,6 +223,10 @@ public sealed partial class MainViewModel : ObservableObject
     partial void OnHasPageRangeErrorChanged(bool value) => OnPropertyChanged(nameof(CanStart));
 
     partial void OnHasCropErrorChanged(bool value) => OnPropertyChanged(nameof(CanStart));
+
+    partial void OnGeminiEndpointUrlChanged(string value) => ValidateGeminiEndpoint();
+
+    partial void OnHasGeminiEndpointErrorChanged(bool value) => OnPropertyChanged(nameof(CanStart));
 
     partial void OnOutputPathChanged(string value) => UpdateOutputAvailability();
 
@@ -507,7 +522,7 @@ public sealed partial class MainViewModel : ObservableObject
             },
             Gemini = new GeminiOptions
             {
-                Endpoint = _defaults.Gemini.Endpoint,
+                Endpoint = ResolveGeminiEndpoint(),
                 ApiKeyStorage = _defaults.Gemini.ApiKeyStorage,
                 TimeoutSeconds = new GeminiTimeouts { Table = _defaults.Gemini.TimeoutSeconds.Table, Page = _defaults.Gemini.TimeoutSeconds.Page },
                 MaxRetryCount = _defaults.Gemini.MaxRetryCount,
@@ -596,6 +611,40 @@ public sealed partial class MainViewModel : ObservableObject
 
         CropError = string.Empty;
         HasCropError = false;
+    }
+
+    private void ValidateGeminiEndpoint()
+    {
+        var value = GeminiEndpointUrl?.Trim() ?? string.Empty;
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            GeminiEndpointError = "请填写 Gemini URL。";
+            HasGeminiEndpointError = true;
+            return;
+        }
+
+        if (!value.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
+        {
+            GeminiEndpointError = "Gemini URL 必须以 https:// 开头。";
+            HasGeminiEndpointError = true;
+            return;
+        }
+
+        if (!value.EndsWith("generateContent", StringComparison.OrdinalIgnoreCase))
+        {
+            GeminiEndpointError = "Gemini URL 必须以 generateContent 结束。";
+            HasGeminiEndpointError = true;
+            return;
+        }
+
+        GeminiEndpointError = string.Empty;
+        HasGeminiEndpointError = false;
+    }
+
+    private string ResolveGeminiEndpoint()
+    {
+        var value = GeminiEndpointUrl?.Trim() ?? string.Empty;
+        return string.IsNullOrWhiteSpace(value) ? _defaults.Gemini.Endpoint : value;
     }
 
     private async Task LoadPdfInfoAsync()

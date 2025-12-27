@@ -85,8 +85,15 @@
                                     <CheckBox Content="启用" IsChecked="{Binding DeskewEnabled}" />
                                 </StackPanel>
                             </StackPanel>
-                            <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
-                                <StackPanel Width="420">
+                            <StackPanel Orientation="Vertical" Margin="0,8,0,0">
+                                <StackPanel Width="520">
+                                    <TextBlock Text="Gemini URL" FontSize="12" Foreground="#666" />
+                                    <TextBox Text="{Binding GeminiEndpointUrl, UpdateSourceTrigger=PropertyChanged}" />
+                                    <TextBlock Foreground="#666" FontSize="12" Text="从 https:// 开始，到 generateContent 结束" Margin="0,2,0,0" />
+                                    <TextBlock Foreground="IndianRed" FontSize="12" Text="{Binding GeminiEndpointError}" Margin="0,2,0,0"
+                                               Visibility="{Binding HasGeminiEndpointError, Converter={StaticResource BoolToVisibility}}" />
+                                </StackPanel>
+                                <StackPanel Width="420" Margin="0,10,0,0">
                                     <TextBlock Text="Gemini API Key" FontSize="12" Foreground="#666" />
                                     <TextBox Text="{Binding GeminiApiKey, UpdateSourceTrigger=PropertyChanged}" />
                                 </StackPanel>
